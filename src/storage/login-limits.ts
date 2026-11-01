@@ -4,8 +4,18 @@ import { sha256 } from '../util/bytes';
 const WINDOW = 15 * 60_000;
 type Bucket = { key: string; free: number; maxShift: number; cap: number };
 
+// An IPv6 client usually holds a whole /64, so bucket those by prefix rather than by address.
+function clientKey(ip: string): string {
+  if (!ip.includes(':')) return ip;
+  if (ip.includes('.')) return ip.slice(ip.lastIndexOf(':') + 1);
+  const [head, tail = ''] = ip.split('::');
+  const left = head ? head.split(':') : [], right = tail ? tail.split(':') : [];
+  const groups = [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+  return groups.slice(0, 4).map(g => g.padStart(4, '0')).join(':') + '::/64';
+}
+
 const ipBucket = async (req: Request): Promise<Bucket> =>
-  ({ key: `ip:${await sha256(req.headers.get('cf-connecting-ip') ?? 'unknown')}`, free: 4, maxShift: 8, cap: 300_000 });
+  ({ key: `ip:${await sha256(clientKey(req.headers.get('cf-connecting-ip') ?? 'unknown'))}`, free: 4, maxShift: 8, cap: 300_000 });
 // Counts only attempts an address bucket admitted, so one address can't fill it. It slows guessing spread over
 // many addresses; the short cap keeps it from becoming a way to hold the owner's logins shut.
 const ACCOUNT: Bucket = { key: 'account:owner', free: 49, maxShift: 3, cap: 10_000 };
