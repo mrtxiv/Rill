@@ -122,7 +122,9 @@ uiRouter.use('/api/*', async (c, next) => {
   // Only the settings page calls these: same-origin JSON blocks cross-site requests.
   if (c.req.header('origin') !== new URL(c.req.url).origin) return c.json({ error: 'Same-origin requests only.' }, 403);
   if (!c.req.header('content-type')?.toLowerCase().startsWith('application/json')) return c.json({ error: 'JSON required.' }, 415);
-  if (!c.req.path.startsWith('/api/account/') && !(await helperAllowed(c.env, c.req.raw, buildCtx))) return c.json({ error: 'Sign in first.' }, 401);
+  // Account routes manage sign-in themselves; collection options are built-in lists the page loads before sign-in.
+  const open = c.req.path.startsWith('/api/account/') || c.req.path === '/api/collections/options';
+  if (!open && !(await helperAllowed(c.env, c.req.raw, buildCtx))) return c.json({ error: 'Sign in first.' }, 401);
   await next();
   c.header('Cache-Control', 'no-store');
 });
