@@ -145,7 +145,13 @@ export function mountAccountRoutes(router: Hono<{ Variables: { ctx?: Ctx }; Bind
     cfg.revision = Math.max(Date.now(), (cfg.revision ?? 0) + 1);
     const token = await encodeConfig(cfg);
     const ctx = await buildCtx(cfg, c.env, origin);
-    await registerAccount({ ...ctx, cfgToken: token, accountConfigToken: token }, true);
+    try {
+      await registerAccount({ ...ctx, cfgToken: token, accountConfigToken: token }, true);
+    } catch (error) {
+      // Release a fresh claim whose config didn't save, so the next attempt can claim again.
+      if (fresh) await c.env.DB.prepare('DELETE FROM owner WHERE id = 1 AND installation_key = ?').bind(cfg.installationKey).run();
+      throw error;
+    }
     if (!fresh && (owner!.username !== username || !timingSafeEqual(await pbkdf2(password, owner!.salt), owner!.password_hash))) {
       await writeOwner(c.env, cfg.installationKey, username, password);
     }
