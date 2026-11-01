@@ -43,8 +43,7 @@ const libraries = new WeakMap<JfRequest, Library>();
 
 const CORS: Record<string, string> = {
   'access-control-allow-origin': '*',
-  'access-control-allow-credentials': 'true',
-  'access-control-allow-headers': '*',
+  'access-control-allow-headers': 'Authorization, *',
   'access-control-expose-headers': '*',
   'access-control-allow-methods': 'GET, HEAD, POST, PUT, DELETE, OPTIONS',
 };

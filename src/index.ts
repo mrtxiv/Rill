@@ -19,10 +19,12 @@ app.use(contextStorage());
 app.use('*', async (c, next) => {
   if (c.env.DB) await ensureSchema(c.env.DB);
   await next();
-  c.res.headers.set('Access-Control-Allow-Origin', c.req.header('origin') || '*');
-  c.res.headers.set('Access-Control-Allow-Headers', '*');
+  // Stremio and Jellyfin clients call from other origins with tokens, never cookies. The cookie-authenticated
+  // settings API stays same-origin, so other sites can't read its responses with the owner's session.
+  if (new URL(c.req.url).pathname.startsWith('/api/')) return;
+  c.res.headers.set('Access-Control-Allow-Origin', '*');
+  c.res.headers.set('Access-Control-Allow-Headers', 'Authorization, *');
   c.res.headers.set('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  c.res.headers.set('Access-Control-Allow-Credentials', 'true');
 });
 app.options('*', (c) => c.body(null, 204));
 
