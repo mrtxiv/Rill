@@ -7,6 +7,7 @@ import { registerAccount } from '../storage/state';
 import { signingSecret } from '../jellyfin/auth';
 import { b64urlDecode, b64urlEncode, hmac, sha256, timingSafeEqual } from '../util/bytes';
 import { mountUpdateRoutes } from './updates';
+import { loginThrottle, resetLogin } from '../storage/login-limits';
 
 const COOKIE = 'rill_owner';
 const SESSION_DAYS = 30;
@@ -98,10 +99,13 @@ export function mountAccountRoutes(router: Hono<{ Variables: { ctx?: Ctx }; Bind
     const origin = new URL(c.req.url).origin;
     const owner = c.env.DB ? await readOwner(c.env) : null;
     if (!owner) return c.json({ error: 'No account exists yet.' }, 404);
+    const retry = await loginThrottle(c.env, c.req.raw);
+    if (retry) { c.header('Retry-After', String(retry)); return c.json({ error: 'Too many attempts. Try again later.' }, 429); }
     const body = await readBody(c.req.raw);
     const username = String(body.username ?? '').trim().toLowerCase(), password = String(body.password ?? '');
     const ok = username === owner.username.toLowerCase() && timingSafeEqual(await pbkdf2(password, owner.salt), owner.password_hash);
     if (!ok) return c.json({ error: 'Wrong username or password.' }, 401);
+    await resetLogin(c.env, c.req.raw);
     const ctx = await baseCtx(c.env, origin);
     c.header('Set-Cookie', setCookie(origin, await mintSession(ctx), SESSION_DAYS * 86400));
     return c.json({ config: await ownerConfig(c.env, owner), username: owner.username });

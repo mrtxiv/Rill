@@ -1,3 +1,4 @@
+import { loginThrottle, resetLogin } from '../storage/login-limits';
 import { profileContext, profileUsers } from './profiles';
 import { presentTitles } from './presentation';
 import { revokeToken } from './auth';
@@ -251,11 +252,14 @@ async function signIn(c: C): Promise<Response> {
 
 inner.post('/users/authenticatebyname', async (c) => {
   const jf = c.get('jf');
+  const retry = await loginThrottle(jf.ctx.env, c.req.raw);
+  if (retry) { c.header('Retry-After', String(retry)); return reply(c, { Message: 'Too many attempts. Try again later.' }, 429); }
   const username = jf.body.Username ?? jf.body.username;
   const password = jf.body.Pw ?? jf.body.pw ?? jf.body.Password ?? jf.body.password ?? '';
   const profile = jf.ctx.cfg.jellyfin.profiles?.find(p => p.name.toLowerCase() === String(username ?? '').trim().toLowerCase());
   const loginCtx = profile ? {...jf.ctx,cfg:{...jf.ctx.cfg,jellyfin:{...jf.ctx.cfg.jellyfin,username:profile.name}}} : jf.ctx;
   if (!credentialsMatch(loginCtx, username, password)) return reply(c, { Message: 'Invalid username or password' }, 401);
+  await resetLogin(jf.ctx.env, c.req.raw);
   jf.ctx = profileContext(jf.ctx,profile?.id)!;
   jf.who = await identityOf(jf.ctx);
   return signIn(c);
