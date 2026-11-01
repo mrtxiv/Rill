@@ -27,6 +27,14 @@ async function readOwner(env: Env): Promise<OwnerRow | null> {
   return env.DB.prepare('SELECT installation_key, username, password_hash, salt FROM owner WHERE id = 1').first<OwnerRow>();
 }
 
+// INSERT OR IGNORE: of two first saves racing to claim a new install, only one becomes the owner.
+async function claimOwner(env: Env, installationKey: string, username: string, password: string): Promise<boolean> {
+  const salt = b64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
+  const result = await env.DB!.prepare('INSERT OR IGNORE INTO owner(id, installation_key, username, password_hash, salt, created) VALUES(1, ?, ?, ?, ?, ?)')
+    .bind(installationKey, username, await pbkdf2(password, salt), salt, Date.now()).run();
+  return result.meta.changes === 1;
+}
+
 async function writeOwner(env: Env, installationKey: string, username: string, password: string): Promise<void> {
   const salt = b64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
   const hash = await pbkdf2(password, salt);
@@ -91,7 +99,7 @@ export function mountAccountRoutes(router: Hono<{ Variables: { ctx?: Ctx }; Bind
     if (!c.env.DB) return c.json({ durable: false, exists: false, signedIn: false });
     const owner = await readOwner(c.env);
     const signedIn = owner ? await validSession(await baseCtx(c.env, origin), c.req.raw) : false;
-    return c.json({ durable: true, exists: Boolean(owner), signedIn, username: signedIn ? owner!.username : undefined });
+    return c.json({ durable: true, exists: Boolean(owner), signedIn, username: signedIn ? owner!.username : undefined, setupToken: !owner && Boolean(c.env.RILL_SETUP_TOKEN) });
   });
 
   router.post('/api/account/login', async (c) => {
@@ -129,13 +137,16 @@ export function mountAccountRoutes(router: Hono<{ Variables: { ctx?: Ctx }; Bind
       cfg.installationKey = owner.installation_key;
     } else {
       fresh = true;
+      // With RILL_SETUP_TOKEN set, only someone who knows it can claim a new install. Digests keep the compare length-independent.
+      if (c.env.RILL_SETUP_TOKEN && !timingSafeEqual(await sha256(String(body.setupToken ?? '').trim()), await sha256(c.env.RILL_SETUP_TOKEN.trim()))) return c.json({ error: 'Enter the setup token.' }, 403);
       if (!cfg.installationKey) cfg.installationKey = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+      if (!(await claimOwner(c.env, cfg.installationKey, username, password))) return c.json({ error: 'An account already exists. Sign in.' }, 409);
     }
     cfg.revision = Math.max(Date.now(), (cfg.revision ?? 0) + 1);
     const token = await encodeConfig(cfg);
     const ctx = await buildCtx(cfg, c.env, origin);
     await registerAccount({ ...ctx, cfgToken: token, accountConfigToken: token }, true);
-    if (fresh || owner!.username !== username || !timingSafeEqual(await pbkdf2(password, owner!.salt), owner!.password_hash)) {
+    if (!fresh && (owner!.username !== username || !timingSafeEqual(await pbkdf2(password, owner!.salt), owner!.password_hash))) {
       await writeOwner(c.env, cfg.installationKey, username, password);
     }
     if (fresh) c.header('Set-Cookie', setCookie(origin, await mintSession(ctx), SESSION_DAYS * 86400));
