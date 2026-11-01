@@ -80,6 +80,12 @@ async function readBody(req: Request): Promise<Json> {
   try { const d: unknown = await req.json(); return d && typeof d === 'object' && !Array.isArray(d) ? d as Json : {}; } catch { return {}; }
 }
 
+// Helpers stay open for stateless installs and before an owner exists; after that they need the owner's session.
+export async function helperAllowed(env: Env, req: Request, buildCtx: BuildCtx): Promise<boolean> {
+  const owner = env.DB ? await readOwner(env) : null;
+  return !owner || validSession(await buildCtx(normalizeConfig({}), env, new URL(req.url).origin), req);
+}
+
 export function mountAccountRoutes(router: Hono<{ Variables: { ctx?: Ctx }; Bindings: Env }>, buildCtx: BuildCtx): void {
   const baseCtx = (env: Env, origin: string) => buildCtx(normalizeConfig({}), env, origin);
 
