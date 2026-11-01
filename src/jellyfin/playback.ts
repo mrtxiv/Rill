@@ -3,6 +3,7 @@ import type { Stream } from '../stremio/types';
 import { containerOf, mediaSource, mediaSourceId, runtimeTicks, streamLabel, subtitleContentType, subtitleFormat, subtitleEntries, type Dto, type MediaSourceInput } from './dto';
 import { plainGuid, type TitleGuid } from './ids';
 import type { Library } from './library';
+import { MEDIA_HEADERS } from './images';
 
 function playable(s: Stream): s is Stream & { url: string } {
   if (!s || typeof s.url !== 'string' || !/^https?:\/\//i.test(s.url)) return false;
@@ -104,10 +105,10 @@ export async function subtitleResponse(sources: Dto[], sourceId: string, index: 
     if(requested==='vtt'&&original==='srt') {
       const text=(await upstream.text()).replace(/^\uFEFF/,'').replace(/\r\n?/g,'\n');
       const vtt='WEBVTT\n\n'+text.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g,'$1.$2');
-      return new Response(vtt,{headers:{'content-type':type,'cache-control':'private, max-age=3600'}});
+      return new Response(vtt,{headers:{...MEDIA_HEADERS,'content-type':type,'cache-control':'private, max-age=3600'}});
     }
     if(requested&&requested!==original){await upstream.body?.cancel();return new Response('Unsupported subtitle conversion',{status:400});}
-    return new Response(upstream.body, { status: 200, headers: { 'content-type': type, 'cache-control': 'private, max-age=3600' } });
+    return new Response(upstream.body, { status: 200, headers: { ...MEDIA_HEADERS, 'content-type': type, 'cache-control': 'private, max-age=3600' } });
   } catch {
     return new Response('Subtitle unavailable', { status: 502 });
   }
