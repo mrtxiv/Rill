@@ -6,33 +6,44 @@ import { boxSetCoverUrl, boxSetOf, collectionOf } from './collections';
 import type { JfRequest } from './request';
 import { artworkTag } from './image-tags';
 
-const IMAGE_LIMIT = 8 * 1024 * 1024;
+const IMAGE_LIMIT = 32 * 1024 * 1024;
 // Served from the same origin as the settings page, so anything a browser could run (SVG, HTML) must never pass as an image.
 export const MEDIA_HEADERS = { 'content-security-policy': 'sandbox', 'x-content-type-options': 'nosniff', 'content-disposition': 'inline' };
 
-function rasterType(raw: string, bytes: Uint8Array): string | null {
-  const mime = raw.split(';')[0].trim().toLowerCase();
+// The type comes from the bytes: hosts often mislabel JPEG as image/png or image/jpg, and SVG has no signature here.
+function rasterType(bytes: Uint8Array): string | null {
   const starts = (sig: number[], at = 0) => sig.every((n, i) => bytes[at + i] === n);
-  if (mime === 'image/png' && starts([137, 80, 78, 71, 13, 10, 26, 10])) return mime;
-  if (mime === 'image/jpeg' && starts([255, 216, 255])) return mime;
-  if (mime === 'image/gif' && starts([71, 73, 70, 56]) && (bytes[4] === 55 || bytes[4] === 57) && bytes[5] === 97) return mime;
-  if (mime === 'image/webp' && starts([82, 73, 70, 70]) && starts([87, 69, 66, 80], 8)) return mime;
+  if (starts([137, 80, 78, 71, 13, 10, 26, 10])) return 'image/png';
+  if (starts([255, 216, 255])) return 'image/jpeg';
+  if (starts([71, 73, 70, 56]) && (bytes[4] === 55 || bytes[4] === 57) && bytes[5] === 97) return 'image/gif';
+  if (starts([82, 73, 70, 70]) && starts([87, 69, 66, 80], 8)) return 'image/webp';
   return null;
 }
 
-async function readLimited(body: ReadableStream<Uint8Array> | null, max: number): Promise<Uint8Array | null> {
-  if (!body) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
-    size += chunk.byteLength;
-    if (size > max) { await body.cancel().catch(() => {}); return null; }
-    chunks.push(chunk);
+// Reads just enough to identify the image, then streams the rest through a byte counter.
+async function rasterBody(body: ReadableStream<Uint8Array>, max: number): Promise<{ mime: string; stream: ReadableStream<Uint8Array> } | null> {
+  const reader = body.getReader();
+  let head = new Uint8Array(0);
+  while (head.length < 12) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const next = new Uint8Array(head.length + value.length);
+    next.set(head); next.set(value, head.length); head = next;
   }
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of chunks) { out.set(chunk, at); at += chunk.byteLength; }
-  return out;
+  const mime = rasterType(head);
+  if (!mime || head.length > max) { await reader.cancel().catch(() => {}); return null; }
+  let size = head.length;
+  return { mime, stream: new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(head); },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) { controller.close(); return; }
+      size += value.length;
+      if (size > max) { controller.error(new Error('Image exceeds byte limit')); await reader.cancel().catch(() => {}); return; }
+      controller.enqueue(value);
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  }) };
 }
 
 export type ImageKind = 'primary' | 'backdrop' | 'logo' | 'thumb' | 'banner' | 'art';
@@ -126,16 +137,15 @@ export async function imageResponse(jf: JfRequest, request: Request, url: string
       console.warn('Jellyfin image unavailable', {type:kind,host:new URL(source).hostname,status:upstream.status});
       return new Response(null, {status:upstream.status === 404 ? 404 : 502,headers:{'cache-control':'no-store'}});
     }
-    const bytes = Number(upstream.headers.get('content-length') ?? 0) > IMAGE_LIMIT ? null : await readLimited(upstream.body, IMAGE_LIMIT);
-    const mime = bytes && rasterType(contentType, bytes);
-    if (!bytes || !mime) {
+    const raster = upstream.body && Number(upstream.headers.get('content-length') ?? 0) <= IMAGE_LIMIT ? await rasterBody(upstream.body, IMAGE_LIMIT) : null;
+    if (!raster) {
       await upstream.body?.cancel().catch(() => {});
       console.warn('Jellyfin image rejected', {type:kind,host:new URL(source).hostname});
       return new Response(null, {status:502,headers:{'cache-control':'no-store'}});
     }
-    response = new Response(bytes, {headers:{
+    response = new Response(raster.stream, {headers:{
       ...MEDIA_HEADERS,
-      'content-type':mime,
+      'content-type':raster.mime,
       'cache-control':'public, max-age=86400',
       etag:upstream.headers.get('etag') ?? `"${artworkTag(source)}"`,
     }});
