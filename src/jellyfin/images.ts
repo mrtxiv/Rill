@@ -6,6 +6,46 @@ import { boxSetCoverUrl, boxSetOf, collectionOf } from './collections';
 import type { JfRequest } from './request';
 import { artworkTag } from './image-tags';
 
+const IMAGE_LIMIT = 32 * 1024 * 1024;
+// Served from the same origin as the settings page, so anything a browser could run (SVG, HTML) must never pass as an image.
+export const MEDIA_HEADERS = { 'content-security-policy': 'sandbox', 'x-content-type-options': 'nosniff', 'content-disposition': 'inline' };
+
+// The type comes from the bytes: hosts often mislabel JPEG as image/png or image/jpg, and SVG has no signature here.
+function rasterType(bytes: Uint8Array): string | null {
+  const starts = (sig: number[], at = 0) => sig.every((n, i) => bytes[at + i] === n);
+  if (starts([137, 80, 78, 71, 13, 10, 26, 10])) return 'image/png';
+  if (starts([255, 216, 255])) return 'image/jpeg';
+  if (starts([71, 73, 70, 56]) && (bytes[4] === 55 || bytes[4] === 57) && bytes[5] === 97) return 'image/gif';
+  if (starts([82, 73, 70, 70]) && starts([87, 69, 66, 80], 8)) return 'image/webp';
+  return null;
+}
+
+// Reads just enough to identify the image, then streams the rest through a byte counter.
+async function rasterBody(body: ReadableStream<Uint8Array>, max: number): Promise<{ mime: string; stream: ReadableStream<Uint8Array> } | null> {
+  const reader = body.getReader();
+  let head = new Uint8Array(0);
+  while (head.length < 12) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const next = new Uint8Array(head.length + value.length);
+    next.set(head); next.set(value, head.length); head = next;
+  }
+  const mime = rasterType(head);
+  if (!mime || head.length > max) { await reader.cancel().catch(() => {}); return null; }
+  let size = head.length;
+  return { mime, stream: new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(head); },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) { controller.close(); return; }
+      size += value.length;
+      if (size > max) { controller.error(new Error('Image exceeds byte limit')); await reader.cancel().catch(() => {}); return; }
+      controller.enqueue(value);
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  }) };
+}
+
 export type ImageKind = 'primary' | 'backdrop' | 'logo' | 'thumb' | 'banner' | 'art';
 
 function pickTitleImage(meta: Meta, kind: ImageKind): string | undefined {
@@ -80,7 +120,8 @@ export async function imageResponse(jf: JfRequest, request: Request, url: string
   }
   // Quality is accepted as a client preference; original encoding and alpha are preserved.
   const source = sizedImage(url, kind, maxWidth);
-  const cacheKey = `${jf.ctx.origin}/.rill-images/${jf.ctx.scope}/${artworkTag(source)}`;
+  // New namespace: entries cached before the raster check may hold SVG.
+  const cacheKey = `${jf.ctx.origin}/.rill-images-v2/${jf.ctx.scope}/${artworkTag(source)}`;
   let response: Response | undefined;
   try { response = await caches.default.match(cacheKey); } catch {}
   if (!response) {
@@ -96,11 +137,17 @@ export async function imageResponse(jf: JfRequest, request: Request, url: string
       console.warn('Jellyfin image unavailable', {type:kind,host:new URL(source).hostname,status:upstream.status});
       return new Response(null, {status:upstream.status === 404 ? 404 : 502,headers:{'cache-control':'no-store'}});
     }
-    response = new Response(upstream.body, {headers:{
-      'content-type':contentType,
+    const raster = upstream.body && Number(upstream.headers.get('content-length') ?? 0) <= IMAGE_LIMIT ? await rasterBody(upstream.body, IMAGE_LIMIT) : null;
+    if (!raster) {
+      await upstream.body?.cancel().catch(() => {});
+      console.warn('Jellyfin image rejected', {type:kind,host:new URL(source).hostname});
+      return new Response(null, {status:502,headers:{'cache-control':'no-store'}});
+    }
+    response = new Response(raster.stream, {headers:{
+      ...MEDIA_HEADERS,
+      'content-type':raster.mime,
       'cache-control':'public, max-age=86400',
       etag:upstream.headers.get('etag') ?? `"${artworkTag(source)}"`,
-      'x-content-type-options':'nosniff',
     }});
     if (jf.ctx.defer) jf.ctx.defer(caches.default.put(cacheKey, response.clone()).catch(() => {}));
   }
