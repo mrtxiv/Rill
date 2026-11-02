@@ -1,14 +1,14 @@
+import { Buffer } from 'node:buffer';
+
 export function b64urlEncode(bytes: Uint8Array): string {
-  let s = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64url');
 }
 export function b64urlDecode(text: string): Uint8Array {
   const pad = text.length % 4 ? '='.repeat(4 - (text.length % 4)) : '';
-  const bin = atob(text.replace(/-/g, '+').replace(/_/g, '/') + pad);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  const input = (text + pad).replace(/[\t\n\f\r ]/g, '');
+  // Buffer silently skips invalid input; preserve the errors callers received from atob.
+  if (!/^[A-Za-z0-9_+/-]*={0,2}$/.test(input) || input.replace(/=+$/, '').length % 4 === 1 || input.includes('=') && input.length % 4 !== 0) throw Error('Invalid base64');
+  return new Uint8Array(Buffer.from(input, 'base64url'));
 }
 export function hex(bytes: ArrayBuffer | Uint8Array): string {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
