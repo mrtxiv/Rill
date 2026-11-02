@@ -65,7 +65,7 @@ export async function scheduled(event: ScheduledController, env: Env): Promise<v
     } catch(error) { if(!(error instanceof DatabaseBudgetExceeded)) console.warn('Account synchronization failed'); }
   }
   const daily=Math.floor(event.scheduledTime/60_000)%1440===0;
-  if(!hasDatabaseBudget(db,daily?5:3)) return;
+  if(!hasDatabaseBudget(db,daily?6:3)) return;
   await db.batch([
     db.prepare('DELETE FROM state WHERE expires<=?').bind(now),
     db.prepare("DELETE FROM deliveries WHERE status IN ('done','superseded') AND due<?").bind(now-30*86400_000),
@@ -73,6 +73,7 @@ export async function scheduled(event: ScheduledController, env: Env): Promise<v
     ...(daily?[
       db.prepare('DELETE FROM image_tags WHERE created<?').bind(now-30*86400_000),
       db.prepare('DELETE FROM presentations WHERE expires<=?').bind(now),
+      db.prepare('DELETE FROM login_limits WHERE window_start<? AND blocked_until<=?').bind(now-15*60_000,now),
     ]:[]),
   ]);
 }
