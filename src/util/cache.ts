@@ -18,7 +18,8 @@ function forgetHot(url:string):void {
 function rememberHot(key:string,url:string,json:string,expires:number):void {
   // Only reusable metadata and revision-keyed shelves belong in this cache.
   // Authentication, tracker state and delivery acknowledgements stay fresh.
-  if(!/^(jf-meta:|jf-shelf:|catalog-defs:|addon-catalog-defs:|tmdb:|anime:)/.test(key)||json.length>512_000||url.length>16_384)return;
+  const reusable=/^(jf-meta:|jf-shelf:|catalog-defs:|addon-catalog-defs:|tmdb:|anime:)/.test(key)||/^json::https?:\/\/\S+\/manifest\.json$/.test(key);
+  if(!reusable||json.length>512_000||url.length>16_384)return;
   forgetHot(url);
   while(hot.size>=128||hotSize+json.length>4_000_000)forgetHot(hot.keys().next().value!);
   hot.set(url,{json,expires});hotSize+=json.length;
