@@ -841,6 +841,7 @@ function body(): string {
     <div class="f"><label class="t" for="jf-user">Username</label><input type="text" id="jf-user" data-k="jellyfin.username" autocomplete="off" spellcheck="false"></div>
     <div class="f"><label class="t" for="jf-pass">Password</label><input type="password" id="jf-pass" data-k="jellyfin.password" autocomplete="off"></div>
     <div class="f"><label class="t" for="jf-max">Max sources per title</label><input type="number" id="jf-max" data-k="jellyfin.maxSources" min="1" max="200"></div>
+    <div class="f"><label class="t" for="jf-torrent">Torrent streaming server</label><input type="url" id="jf-torrent" data-k="jellyfin.torrentServer" placeholder="Optional, e.g. http://localhost:11470" autocomplete="off" spellcheck="false"></div>
   </div>
   <details class="profile-settings"><summary>Profiles</summary><p class="note">Profiles use the same password. Share your watch history or keep it separate.</p><div id="profiles"></div><button type="button" id="profile-add">Add profile</button></details>
   <label class="t">Home screen rows</label>

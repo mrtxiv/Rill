@@ -8,6 +8,7 @@
     "build": "node scripts/build.mjs",
     "migrate": "wrangler d1 migrations apply DB --remote",
     "deploy": "node scripts/deploy.mjs",
+    "test": "node --import ./tests/register.mjs --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "posttypecheck": "node scripts/prepare-deployment.mjs"
   },

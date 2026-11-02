@@ -1,14 +1,25 @@
-import { externalStreams, externalSubtitles } from '../stremio/client';
+import { externalStreams, externalSubtitles, type StreamReport } from '../stremio/client';
 import type { Stream } from '../stremio/types';
 import { containerOf, mediaSource, mediaSourceId, runtimeTicks, streamLabel, subtitleContentType, subtitleFormat, subtitleEntries, type Dto, type MediaSourceInput } from './dto';
 import { plainGuid, type TitleGuid } from './ids';
 import type { Library } from './library';
 
-function playable(s: Stream): s is Stream & { url: string } {
-  if (!s || typeof s.url !== 'string' || !/^https?:\/\//i.test(s.url)) return false;
+type Unplayable = 'torrent' | 'headers' | 'other';
+
+function needsHeaders(s: Stream): boolean {
   const ph = s.behaviorHints?.proxyHeaders;
-  if (ph && ((ph.request && Object.keys(ph.request).length) || (ph.response && Object.keys(ph.response).length))) return false;
-  return true;
+  return Boolean(ph && ((ph.request && Object.keys(ph.request).length) || (ph.response && Object.keys(ph.response).length)));
+}
+
+export function playableUrl(s: Stream, torrentServer?: string): string | Unplayable {
+  if (typeof s.url === 'string' && /^https?:\/\//i.test(s.url)) return needsHeaders(s) ? 'headers' : s.url;
+  if (typeof s.infoHash !== 'string' || !/^[a-f0-9]{40}$/i.test(s.infoHash)) return 'other';
+  if (!torrentServer) return 'torrent';
+  // Stremio uses -1 to select the main video when the add-on omits a file index.
+  const idx = Number.isInteger(s.fileIdx) && s.fileIdx! >= 0 ? s.fileIdx! : -1;
+  const trackers = (Array.isArray(s.sources) ? s.sources : []).filter(x => typeof x === 'string' && /^(tracker:|dht:)/.test(x)).slice(0, 20);
+  const query = trackers.length ? `?${trackers.map(t => `tr=${encodeURIComponent(t)}`).join('&')}` : '';
+  return `${torrentServer}/${s.infoHash.toLowerCase()}/${idx}${query}`;
 }
 
 export interface ResolvedSources {
@@ -32,30 +43,41 @@ export async function resolveSources(lib: Library, g: TitleGuid, itemId: string,
   const streamId = streamIds[0];
 
   let streams: Stream[] = [];
+  const report: StreamReport = { addons: 0, asked: 0, failed: 0, streams: 0 };
   try {
-    streams = await externalStreams(ctx, streamType, streamIds, g.kind === 'movie' ? 'movie' : 'series');
+    streams = await externalStreams(ctx, streamType, streamIds, g.kind === 'movie' ? 'movie' : 'series', report);
   } catch {
     streams = [];
   }
-  const usable = streams.filter(playable).slice(0, ctx.cfg.jellyfin.maxSources);
-  if (!usable.length) return { sources: [], streamType, streamId };
+  const skipped: Record<Unplayable, number> = { torrent: 0, headers: 0, other: 0 };
+  const usable: Array<{ s: Stream; url: string }> = [];
+  for (const s of streams) {
+    const url = playableUrl(s, ctx.cfg.jellyfin.torrentServer);
+    if (url === 'torrent' || url === 'headers' || url === 'other') skipped[url]++;
+    else if (usable.length < ctx.cfg.jellyfin.maxSources) usable.push({ s, url });
+  }
+  if (!usable.length) {
+    // Stream addresses can carry add-on credentials, so log counts only.
+    console.warn('No playable stream', { ...report, torrentOnly: skipped.torrent, needsHeaders: skipped.headers, other: skipped.other });
+    return { sources: [], streamType, streamId };
+  }
 
   const runtime = runtimeTicks(meta?.runtime);
   const subs = options.includeSubtitles !== false && ctx.cfg.addons.subtitle.length ? subtitleEntries(await externalSubtitles(ctx, streamType, streamIds, {}, g.kind === 'movie' ? 'movie' : 'series').catch(() => [])) : [];
 
   const seen = new Set<string>();
   const sources: Dto[] = [];
-  for (const s of usable) {
-    const hashed = await mediaSourceId(s.url);
+  for (const { s, url } of usable) {
+    const hashed = await mediaSourceId(url);
     if (seen.has(hashed)) continue;
     seen.add(hashed);
     const id = sources.length === 0 ? plainGuid(itemId) || hashed : hashed;
     const size = Number(s.behaviorHints?.videoSize);
     const input: MediaSourceInput = {
       id,
-      url: s.url,
+      url,
       label: streamLabel(s),
-      container: containerOf(s),
+      container: containerOf({ ...s, url }),
       size: Number.isFinite(size) && size > 0 ? size : null,
       filename: s.behaviorHints?.filename ?? null,
       runtimeTicks: runtime,
