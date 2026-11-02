@@ -573,7 +573,7 @@ function brand(welcome = false, heading = true): string {
 function body(): string {
   return `
 <main>
-<div id="setup-gate" hidden><form id="setup-form" autocomplete="on">${brand(true)}<h2>Create your account</h2><p class="note">One account protects this page and signs you in from Jellyfin apps. Your settings are stored on your Worker and follow you to every device.</p><div class="f"><label class="t" for="setup-user">Username</label><input type="text" id="setup-user" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div><div class="f"><label class="t" for="setup-pass">Password</label><input type="password" id="setup-pass" name="password" autocomplete="new-password" minlength="8" required><p class="hint">At least 8 characters.</p></div><div class="f"><label class="t" for="setup-pass2">Confirm password</label><input type="password" id="setup-pass2" autocomplete="new-password" minlength="8" required></div><button type="submit" id="setup-submit">Create account</button><p class="status" id="setup-status" role="alert"></p></form></div>
+<div id="setup-gate" hidden><form id="setup-form" autocomplete="on">${brand(true)}<h2>Create your account</h2><p class="note">One account protects this page and signs you in from Jellyfin apps. Your settings are stored on your Worker and follow you to every device.</p><div class="f" id="setup-token-field" hidden><label class="t" for="setup-token">Setup token</label><input type="password" id="setup-token" autocomplete="off"><p class="hint">The RILL_SETUP_TOKEN secret you set when deploying.</p></div><div class="f"><label class="t" for="setup-user">Username</label><input type="text" id="setup-user" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div><div class="f"><label class="t" for="setup-pass">Password</label><input type="password" id="setup-pass" name="password" autocomplete="new-password" minlength="8" required><p class="hint">At least 8 characters.</p></div><div class="f"><label class="t" for="setup-pass2">Confirm password</label><input type="password" id="setup-pass2" autocomplete="new-password" minlength="8" required></div><button type="submit" id="setup-submit">Create account</button><p class="status" id="setup-status" role="alert"></p></form></div>
 <div id="login-gate" hidden><form id="login-form" autocomplete="on">${brand(true)}<p class="note">Sign in with your Jellyfin username and password to open your settings.</p><div class="f"><label class="t" for="login-user">Username</label><input type="text" id="login-user" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div><div class="f"><label class="t" for="login-pass">Password</label><input type="password" id="login-pass" name="password" autocomplete="current-password" required></div><button type="submit" id="login-submit">Sign in</button><p class="status" id="login-status" role="alert"></p></form></div>
 <header>
   <div class="brand-row">${brand()}<div class="header-actions"><span id="draft-status" role="status" hidden>Saved on this device</span><div id="account" class="account"></div><button type="button" id="menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="drawer"><span></span><span></span><span></span></button></div></div>
@@ -1181,6 +1181,7 @@ const JS = String.raw`
     if (!$('login-gate').hidden) $('login-user').focus();
     var firstRun = account.durable && !account.exists;
     $('setup-gate').hidden = !firstRun;
+    $('setup-token-field').hidden = !account.setupToken;
     if (firstRun) { $('setup-user').value = $('setup-user').value || (cfg.jellyfin.username !== 'rill' ? cfg.jellyfin.username : ''); $('setup-user').focus(); }
     if (!account.signedIn) {
       updateState = null; updateLoaded = false; clearTimeout(updateTimer); clearTimeout(updatePoll);
@@ -1232,7 +1233,7 @@ const JS = String.raw`
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !drawer.hidden) closeDrawer(); });
   all('.seg [data-mode]').forEach(function (b) { b.addEventListener('click', function () { cfg.advanced = b.dataset.mode === 'advanced'; changed(); applyMode(); renderDrawerNav(); }); });
   function saveRemote() {
-    return api('/api/account/save', { config: cfg }).then(function (r) {
+    return api('/api/account/save', { config: cfg, setupToken: $('setup-token').value }).then(function (r) {
       if (r.error) { $('draft-status').textContent = r.error; return r; }
       $('draft-status').textContent = 'Saved to your server';
       if (r.config && r.config.installationKey) cfg.installationKey = r.config.installationKey;
@@ -2306,7 +2307,7 @@ const JS = String.raw`
   encode();
   loadCatalogs();
   api('/api/account/status').then(function (r) {
-    account = { durable: !!r.durable, exists: !!r.exists, signedIn: !!r.signedIn, username: r.username || '' };
+    account = { durable: !!r.durable, exists: !!r.exists, signedIn: !!r.signedIn, username: r.username || '', setupToken: !!r.setupToken };
     renderAccount();
     if (account.signedIn) api('/api/account/load').then(function (l) { if (!l.error) adoptServerConfig(l.config); });
   });

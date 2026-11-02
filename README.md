@@ -47,6 +47,7 @@ If you are deploying through a GitHub organization, its administrator may need t
 - In the [Cloudflare dashboard](https://dash.cloudflare.com/), go to **Workers & Pages** and select your Worker.
 - Under **Settings → Domains & Routes**, open the `workers.dev` address shown for your installation.
 - Create your installation account with a password of at least **8 characters**. This is separate from your GitHub and Cloudflare accounts.
+- Optional: before opening it, add a `RILL_SETUP_TOKEN` secret (for example `openssl rand -hex 16`) under **Settings → Variables and Secrets**. The setup page then asks for it, so nobody who finds your address first can claim the installation.
 
 Once the settings page opens, you're done. Bookmark the address.
 
