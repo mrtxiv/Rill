@@ -93,6 +93,7 @@ export interface Stream {
   ytId?: string;
   infoHash?: string;
   fileIdx?: number;
+  sources?: string[];
   externalUrl?: string;
   name?: string;
   title?: string;

@@ -84,12 +84,15 @@ export interface SourcedStream extends Stream {
   addon: string;
 }
 
-export async function externalStreams(ctx: Ctx, type: ContentType, ids: string | string[], fallbackType: ContentType = type): Promise<SourcedStream[]> {
+export interface StreamReport { addons: number; asked: number; failed: number; streams: number }
+
+export async function externalStreams(ctx: Ctx, type: ContentType, ids: string | string[], fallbackType: ContentType = type, report?: StreamReport): Promise<SourcedStream[]> {
   const candidates = uniq((Array.isArray(ids) ? ids : [ids]).filter(Boolean), (x) => x);
+  if (report) report.addons = ctx.cfg.addons.stream.length;
   if (!candidates.length) return [];
   const key = `streams:${ctx.scope}:${type}:${candidates.join('|')}`;
   const hit = await cacheGet<SourcedStream[]>(key);
-  if (hit?.length) return hit;
+  if (hit?.length) { if (report) report.streams = hit.length; return hit; }
   const results = await mapLimit(ctx.cfg.addons.stream, 6, async (url) => {
     try {
       const base = addonBase(url);
@@ -97,17 +100,21 @@ export async function externalStreams(ctx: Ctx, type: ContentType, ids: string |
       const manifest = await getManifest(url);
       const asked = pickSupported(manifest, 'stream', [type, fallbackType], candidates);
       if (!asked) return [];
+      if (report) report.asked++;
       const data = await fetchJson<{ streams?: Stream[] }>(`${base}/stream/${asked.type}/${encodeURIComponent(asked.id)}.json`, { ttl: 0, timeoutMs: 20000 });
+      if (!data && report) report.failed++;
       const name = manifest?.name || base;
       return (Array.isArray(data?.streams) ? data.streams : [])
         .filter((s) => s && typeof s === 'object' && !Array.isArray(s))
         .map((s) => ({ ...s, addon: name }));
     } catch {
       // One invalid add-on response must not discard other add-ons' results.
+      if (report) report.failed++;
       return [] as SourcedStream[];
     }
   });
-  const streams = uniq(results.flat(), (s) => s.url || s.infoHash || s.externalUrl || s.ytId || JSON.stringify(s));
+  const streams = uniq(results.flat(), (s) => s.url || (s.infoHash ? `${s.infoHash}:${s.fileIdx ?? ''}` : '') || s.externalUrl || s.ytId || JSON.stringify(s));
+  if (report) report.streams = streams.length;
   if (streams.length) await cachePut(key, streams, 120);
   return streams;
 }
