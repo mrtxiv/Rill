@@ -165,7 +165,25 @@ function dashIds(key: string, value: unknown): unknown {
   return value;
 }
 
+// Some clients open item sources directly instead of requesting PlaybackInfo first.
+function streamablePlaceholders(jf: JfRequest, body: unknown): void {
+  const visit = (dto: Dto) => {
+    if (!dto || typeof dto !== 'object' || !Array.isArray(dto.MediaSources)) return;
+    const id = plainGuid(dto.Id);
+    if (!id) return;
+    for (const source of dto.MediaSources as Dto[]) {
+      if (source?.Type !== 'Placeholder') continue;
+      source.Type = 'Default';
+      source.Path = `${jf.base}/Videos/${id}/stream?static=true&MediaSourceId=${encodeURIComponent(String(source.Id ?? id))}${jf.accessToken ? `&api_key=${encodeURIComponent(jf.accessToken)}` : ''}`;
+    }
+  };
+  const list = Array.isArray(body) ? body : (body as {Items?: unknown} | null)?.Items;
+  if (Array.isArray(list)) list.forEach(item => visit(item as Dto));
+  else visit(body as Dto);
+}
+
 async function reply(c: C, body: unknown, status = 200): Promise<Response> {
+  if (c.get('jf').claims) streamablePlaceholders(c.get('jf'), body);
   const items = Array.isArray(body) ? body : (body as {Items?: unknown} | null)?.Items;
   if (Array.isArray(items) && c.get('jf').claims) {
     try { await presentTitles(c.get('jf').ctx, items); }
@@ -910,12 +928,18 @@ async function videoHandler(c: C): Promise<Response> {
   if (!chosen || typeof chosen.Path !== 'string') return reply(c, { Message: chosen === null && sources.length ? 'Media source not found' : 'No playable stream' }, 404);
   return new Response(null, { status: 302, headers: { location: chosen.Path, 'cache-control': 'no-store' } });
 }
+inner.get('/playback/bitratetest', (c) => {
+  const size = Math.min(Math.max(1, qInt(c.get('jf'), 'Size', 102400)), 10_000_000);
+  return new Response(new Uint8Array(size), { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' } });
+});
+
 const VIDEO_FILE = /^(stream|original)(\.[a-z0-9]+)?$/i;
 const videoFileHandler = (c: C) => (VIDEO_FILE.test(c.req.param('file') ?? '') ? videoHandler(c) : c.notFound());
 for (const path of ['/videos/:id/:file', '/videos/:id/stream/:filename']) {
   inner.get(path, path.endsWith(':file') ? videoFileHandler : videoHandler);
   inner.on('HEAD', path, path.endsWith(':file') ? videoFileHandler : videoHandler);
 }
+inner.get('/items/:id/download', videoHandler);
 
 async function subtitleHandler(c: C): Promise<Response> {
   const { id, g } = itemGuid(c);
